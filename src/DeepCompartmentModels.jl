@@ -19,7 +19,6 @@ using Reexport
 
 @reexport using Static
 @reexport using Distributions
-import DynamicPPL
 @reexport using OrdinaryDiffEq
 @reexport using SciMLSensitivity
 
@@ -66,7 +65,7 @@ export  MSE, SSE, LogLikelihood, VariationalELBO, mse, sse,
         loglikelihood, kldivergence, logprior, logq, getq, logjoint, 
         elbo
 
-include("lib/turing_vem.jl");
+include("lib/variational_em.jl");
 export  AbstractVariationalFamily, FullRankGaussian, LocalVariables,
         VariationalEM, vem_noise
 

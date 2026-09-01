@@ -235,8 +235,7 @@ function residual_error_value_and_gradient(rng::Random.AbstractRNG,
             map(eachindex(individuals)) do i
                 model = _individual_model(objective, dcm, individuals[i],
                     view(typical, :, i), ps_local)
-                DynamicPPL.loglikelihood(
-                    model, _latent_values(objective, etas[i]))
+                _individual_loglikelihood(model, _latent_values(objective, etas[i]))
             end
         end
         return -sum(logsumexp.(lls) .- log(num_samples))

@@ -5,6 +5,7 @@ using DataFrames
 @info "Loading local DeepCompartmentModels package..."
 using DeepCompartmentModels
 println("Done!")
+@test Base.get_extension(DeepCompartmentModels, :DCMDynamicPPLExt) === nothing
 
 @info "Starting tests..."
 

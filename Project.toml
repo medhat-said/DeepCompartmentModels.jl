@@ -7,7 +7,6 @@ authors = ["Janssena <alexanderjanssen@live.com>"]
 Accessors = "7d9f7c33-5ae7-4f3b-8dc6-eff91059b697"
 ComponentArrays = "b0b7db55-cfe3-40fc-9ded-d10e2dbeff66"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
-DynamicPPL = "366bfd00-2699-11ea-058f-f148b4cae6d8"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 Functors = "d9f16b24-f501-4c13-a1f2-28368ffc5196"
 InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
@@ -28,9 +27,11 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [weakdeps]
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+DynamicPPL = "366bfd00-2699-11ea-058f-f148b4cae6d8"
 
 [extensions]
 DCMDataFramesExt = "DataFrames"
+DCMDynamicPPLExt = "DynamicPPL"
 
 [compat]
 Accessors = "0.1"

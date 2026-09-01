@@ -3,6 +3,8 @@ module NamedVEMAPITests
 using DeepCompartmentModels, DynamicPPL, LinearAlgebra, Random, Test
 using ForwardDiff, Zygote
 
+@test Base.get_extension(DeepCompartmentModels, :DCMDynamicPPLExt) !== nothing
+
 DynamicPPL.@model function api_model(theta, noise, observation=0.0)
     η ~ MvNormal(zeros(2), noise.Ω)
     observation ~ Normal(theta.CL + η[1], noise.σ)

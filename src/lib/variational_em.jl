@@ -3,7 +3,7 @@ abstract type AbstractVariationalFamily end
 """Full-rank Gaussian approximation for individual latent variables."""
 struct FullRankGaussian <: AbstractVariationalFamily end
 
-"""Map DCM's latent vector to values accepted by `DynamicPPL.logjoint`."""
+"""Declare a vector-valued local site and its component names."""
 struct LocalVariables{P,N}
     dimension::Int
     pack::P
@@ -15,7 +15,6 @@ struct LocalVariables{P,N}
     end
 end
 
-"""Declare the component order of a vector latent; call with a vector for named access."""
 function LocalVariables(site::Symbol, names::Tuple)
     _validate_names(names)
     return LocalVariables(length(names), η -> NamedTuple{(site,)}((η,)), site, names)
@@ -27,7 +26,7 @@ function (locals::LocalVariables)(η::AbstractVector)
     return NamedTuple{locals.names}(ntuple(i -> η[i], locals.dimension))
 end
 
-"""Constrained VEM noise values; the user model defines how they enter its likelihood."""
+"""Constrained VEM noise values passed to the user model."""
 vem_noise(dcm, ps) = merge((Ω=ps.omega,), _residual_parameters(dcm.error, ps.error))
 _residual_parameters(::Union{AdditiveError,ProportionalError}, ps) =
     (; σ=softplus(only(ps.σ)))
@@ -41,17 +40,15 @@ struct NamedVEMModel{M,N}
     noise::N
 end
 
-function (adapter::NamedVEMModel)(dcm, individual, typical, ps)
-    return adapter.builder(individual, named_parameters(dcm, typical), adapter.noise(dcm, ps))
-end
+(adapter::NamedVEMModel)(dcm, individual, typical, ps) =
+    adapter.builder(individual, named_parameters(dcm, typical), adapter.noise(dcm, ps))
 
 """
     VariationalEM(model_builder; local_variables, noise=vem_noise, path_deriv=true)
 
-`model_builder(individual, theta, noise)` receives named typical parameters and
-constrained noise values. Declare `parameter_names` on DCM. Local latents must be
-Euclidean with a centered Gaussian prior of covariance `ps.omega`; the retained
-analytic Ω update assumes this prior and no Ω hyperprior.
+`model_builder(individual, theta, noise)` returns an individual probabilistic model.
+The model backend is supplied by a package extension. Local variables must have a
+centered Gaussian prior with covariance `ps.omega` for the analytic Ω update.
 """
 struct VariationalEM{M,L,F,PD<:StaticBool} <: MixedObjective
     individual_model::M
@@ -71,8 +68,7 @@ function VariationalEM(individual_model; local_variables::LocalVariables,
     return VariationalEM(NamedVEMModel(individual_model, noise), local_variables; kwargs...)
 end
 
-_num_random_effects(objective::VariationalEM) =
-    objective.local_variables.dimension
+_num_random_effects(objective::VariationalEM) = objective.local_variables.dimension
 
 function _latent_values(objective::VariationalEM, η)
     length(η) == _num_random_effects(objective) ||
@@ -80,38 +76,35 @@ function _latent_values(objective::VariationalEM, η)
     return objective.local_variables.pack(η)
 end
 
-function _individual_model(objective::VariationalEM, dcm, individual, typical, ps)
-    model = objective.individual_model(dcm, individual, typical, ps)
-    model isa DynamicPPL.Model || error("individual_model must return a DynamicPPL.Model")
-    return model
-end
+_individual_model(objective::VariationalEM, dcm, individual, typical, ps) =
+    objective.individual_model(dcm, individual, typical, ps)
+
+_unsupported_model(model) = throw(ArgumentError(
+    "no probabilistic-model extension is loaded for $(typeof(model)); load DynamicPPL"))
+_validate_individual_model(model, locals, values) = _unsupported_model(model)
+_individual_logjoint(model, values) = _unsupported_model(model)
+_individual_loglikelihood(model, values) = _unsupported_model(model)
 
 _validate_vem_setup(::MixedObjective, dcm, population, ps, st) = nothing
 
-function _validate_vem_setup(objective::VariationalEM{<:NamedVEMModel}, dcm, population, ps, st)
+function _validate_vem_setup(objective::VariationalEM, dcm, population, ps, st)
     typical, _ = predict_typ_parameters(dcm, population, ps, st)
     locals = objective.local_variables
+    values = _latent_values(objective, zeros(eltype(ps.omega), locals.dimension))
     for i in eachindex(population)
         model = _individual_model(objective, dcm, population[i], view(typical, :, i), ps)
-        values = _latent_values(objective, zeros(eltype(ps.omega), locals.dimension))
-        vi = DynamicPPL.VarInfo(Random.Xoshiro(0), model, DynamicPPL.InitFromParams(values, nothing))
-        if !isnothing(locals.site)
-            collect(keys(vi)) == [DynamicPPL.VarName{locals.site}()] ||
-                throw(ArgumentError("individual model must sample only the declared local site"))
-        end
+        _validate_individual_model(model, locals, values)
     end
     return nothing
 end
 
-function _model_logjoint(objective::VariationalEM, dcm,
-        population::Population, ps, st)
+function _model_logjoint(objective::VariationalEM, dcm, population::Population, ps, st)
     typical, _ = predict_typ_parameters(dcm, population, ps, st)
     etas = sample_gaussian(ps.phi, st.phi)
     individuals = @ignore_derivatives population.data
     return sum(eachindex(individuals)) do i
-        model = _individual_model(
-            objective, dcm, individuals[i], view(typical, :, i), ps)
-        DynamicPPL.logjoint(model, _latent_values(objective, etas[i]))
+        model = _individual_model(objective, dcm, individuals[i], view(typical, :, i), ps)
+        _individual_logjoint(model, _latent_values(objective, etas[i]))
     end
 end
 
