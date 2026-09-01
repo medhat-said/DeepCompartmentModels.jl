@@ -1,7 +1,6 @@
 [deps]
 DeepCompartmentModels = "398c52f8-e6e0-45bd-bf73-2340696b0a8e"
 DynamicPPL = "366bfd00-2699-11ea-058f-f148b4cae6d8"
-ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 NaturalOptimisers = "baf65090-2b44-4d11-bff8-c4290875b87f"
 Optimisers = "3bd65402-5787-11e9-1adc-39752487f4e2"

@@ -44,61 +44,18 @@ function setup_example()
     return (; dcm, population, objective, model_builder, ps=merge(ps, (; phi)), st)
 end
 
-import ForwardDiff, NaturalOptimisers
-
-function initialise_local_state(rule, μ, L)
-    parameters = (; η=zeros(length(μ)))
-    state = Optimisers.setup(rule, parameters)
-    covariance = Symmetric(L * L')
-    state.η.state = merge(state.η.state, (; q=(copy(μ), Symmetric(inv(covariance)))))
-    return (; parameters, state)
-end
-
-function export_phi(states)
-    moments = map(states) do state
-        μ, precision = state.η.state.q
-        covariance = Symmetric(inv(precision))
-        @assert all(isfinite, μ) && isposdef(covariance)
-        (; μ=copy(μ), L=LowerTriangular(Matrix(cholesky(covariance).L)))
-    end
-    return (; μ=[m.μ for m in moments], L=[m.L for m in moments])
-end
+import NaturalOptimisers
 
 function fit_example()
     (; dcm, population, objective, model_builder, ps, st) = setup_example()
     rng = Random.Xoshiro(11)
     rule = NaturalOptimisers.NaturalDescent(0.02, (0.0, 0.0);
         tau=1.0, meanfield=false, manifold=NaturalOptimisers.RiemannianManifold())
-    local_setup = [initialise_local_state(rule, ps.phi.μ[i], ps.phi.L[i])
-        for i in eachindex(population)]
-    local_parameters = [item.parameters for item in local_setup]
-    local_opt_states = [item.state for item in local_setup]
-    global_opt_state = Optimisers.setup(Optimisers.Adam(1e-3), ps.theta)
-
-    for _ in 1:3
-        typical, _ = predict_typ_parameters(dcm, population, ps, st)
-        noise = vem_noise(dcm, ps)
-        models = [model_builder(population[i], named_parameters(dcm, typical[:, i]), noise)
-            for i in eachindex(population)]
-        for _ in 1:20, i in eachindex(population)
-            draws = NaturalOptimisers.sample(
-                rng, local_parameters[i], local_opt_states[i]; num_samples=8)
-            gradients = [(; η=ForwardDiff.gradient(
-                z -> -DynamicPPL.logjoint(models[i], LOCAL_VARIABLES.pack(z)), draw.η))
-                for draw in draws]
-            local_opt_states[i], local_parameters[i] = Optimisers.update(
-                local_opt_states[i], local_parameters[i], gradients)
-        end
-
-        ps = merge(ps, (; phi=export_phi(local_opt_states)))
-        update_epsilon!(rng, st)
-        grad = DeepCompartmentModels.gradient(objective, dcm, population, ps, st)
-        global_opt_state, theta = Optimisers.update(global_opt_state, ps.theta, grad.theta)
-        ps = merge(ps, (; theta))
-
-        ps = m_step(objective, rng, dcm, population, ps, st;
-            epochs=1, num_samples=8, verbose=false)
-    end
+    fit = fit_vem(rng, objective, dcm, population, ps, st;
+        local_optimizer=rule, global_optimizer=Optimisers.Adam(1e-3),
+        cycles=3, local_epochs=20, global_epochs=1, m_epochs=1,
+        samples=8, verbose=false)
+    ps, st = fit.ps, fit.st
     typical, _ = predict_typ_parameters(dcm, population, ps, st)
     predictions = [DynamicPPL.returned(model_builder(population[i],
         named_parameters(dcm, typical[:, i]), vem_noise(dcm, ps)),
@@ -106,9 +63,7 @@ function fit_example()
     @assert all(p -> all(isfinite, p), predictions)
     println("Typical parameters: ", named_parameters(dcm, typical[:, 1]))
     println("Individual ETA means: ", ps.phi.μ)
-    return (; ps, st, local_opt_state=local_opt_states, local_parameters, global_opt_state,
-        dcm, population, objective,
-        individual_ids=[i.id for i in population], predictions)
+    return merge(fit, (; dcm, population, objective, predictions))
 end
 
 fit = fit_example()

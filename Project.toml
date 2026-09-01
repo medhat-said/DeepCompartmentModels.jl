@@ -28,10 +28,12 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 [weakdeps]
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 DynamicPPL = "366bfd00-2699-11ea-058f-f148b4cae6d8"
+NaturalOptimisers = "baf65090-2b44-4d11-bff8-c4290875b87f"
 
 [extensions]
 DCMDataFramesExt = "DataFrames"
 DCMDynamicPPLExt = "DynamicPPL"
+DCMNaturalOptimisersExt = "NaturalOptimisers"
 
 [compat]
 Accessors = "0.1"
@@ -45,6 +47,7 @@ InvertedIndices = "1"
 LinearAlgebra = "1"
 LogExpFunctions = "0.3"
 Lux = "1.31"
+NaturalOptimisers = "0.2"
 Optimisers = "0.4"
 OrdinaryDiffEq = "6.108"
 Random = "1"

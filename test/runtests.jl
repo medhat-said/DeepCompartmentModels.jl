@@ -6,6 +6,7 @@ using DataFrames
 using DeepCompartmentModels
 println("Done!")
 @test Base.get_extension(DeepCompartmentModels, :DCMDynamicPPLExt) === nothing
+@test Base.get_extension(DeepCompartmentModels, :DCMNaturalOptimisersExt) === nothing
 
 @info "Starting tests..."
 
@@ -37,5 +38,6 @@ begin
 
     @testset "Turing VEM" begin
         include("lib/named_vem_api.test.jl")
+        include("lib/natural_vem_backend.test.jl")
     end
 end

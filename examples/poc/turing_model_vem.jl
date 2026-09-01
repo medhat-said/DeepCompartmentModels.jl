@@ -47,25 +47,12 @@ end
 function fit_example()
     (; dcm, population, objective, model_builder, ps, st) = setup_example()
     rng = Random.Xoshiro(11)
-    local_opt_state = Optimisers.setup(Optimisers.Adam(0.01), ps.phi)
-    global_opt_state = Optimisers.setup(Optimisers.Adam(1e-3), ps.theta)
-
-    for _ in 1:3
-        for _ in 1:20
-            update_epsilon!(rng, st)
-            grad = DeepCompartmentModels.gradient(objective, dcm, population, ps, st)
-            local_opt_state, phi = Optimisers.update(local_opt_state, ps.phi, grad.phi)
-            ps = merge(ps, (; phi))
-        end
-
-        update_epsilon!(rng, st)
-        grad = DeepCompartmentModels.gradient(objective, dcm, population, ps, st)
-        global_opt_state, theta = Optimisers.update(global_opt_state, ps.theta, grad.theta)
-        ps = merge(ps, (; theta))
-
-        ps = m_step(objective, rng, dcm, population, ps, st;
-            epochs=1, num_samples=8, verbose=false)
-    end
+    fit = fit_vem(rng, objective, dcm, population, ps, st;
+        local_optimizer=Optimisers.Adam(0.01),
+        global_optimizer=Optimisers.Adam(1e-3),
+        cycles=3, local_epochs=20, global_epochs=1, m_epochs=1,
+        samples=8, verbose=false)
+    ps, st = fit.ps, fit.st
     typical, _ = predict_typ_parameters(dcm, population, ps, st)
     predictions = [DynamicPPL.returned(model_builder(population[i],
             named_parameters(dcm, typical[:, i]), vem_noise(dcm, ps)),
@@ -73,8 +60,7 @@ function fit_example()
     @assert all(p -> all(isfinite, p), predictions)
     println("Typical parameters: ", named_parameters(dcm, typical[:, 1]))
     println("Individual ETA means: ", ps.phi.μ)
-    return (; ps, st, local_opt_state, global_opt_state, dcm, population, objective,
-        individual_ids=[i.id for i in population], predictions)
+    return merge(fit, (; dcm, population, objective, predictions))
 end
 
 fit = fit_example()

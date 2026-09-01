@@ -76,7 +76,7 @@ include("lib/gradients.jl");
 export  gradient, create_batches, take_batch, residual_error_value_and_gradient
 
 include("lib/vem.jl");
-export  m_step, optimise_omega, optimise_residual_error
+export  fit_vem, m_step, optimise_omega, optimise_residual_error
 
 include("lib/callbacks.jl");
 export  generate_dosing_callback
