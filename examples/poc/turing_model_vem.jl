@@ -6,7 +6,7 @@ import Optimisers
 const LOCAL_VARIABLES = LocalVariables(:η, (:CL, :V))
 
 DynamicPPL.@model function individual_model(dcm, individual, theta, noise,
-        observation=get_y(individual))
+    observation=get_y(individual))
     η ~ MvNormal(zeros(LOCAL_VARIABLES.dimension), noise.Ω)
     eta = LOCAL_VARIABLES(η)
     pars = (; Ka=theta.Ka, CL=theta.CL * exp(eta.CL), V=theta.V * exp(eta.V))
@@ -68,7 +68,7 @@ function fit_example()
     end
     typical, _ = predict_typ_parameters(dcm, population, ps, st)
     predictions = [DynamicPPL.returned(model_builder(population[i],
-        named_parameters(dcm, typical[:, i]), vem_noise(dcm, ps)),
+            named_parameters(dcm, typical[:, i]), vem_noise(dcm, ps)),
         LOCAL_VARIABLES.pack(ps.phi.μ[i])).prediction for i in eachindex(population)]
     @assert all(p -> all(isfinite, p), predictions)
     println("Typical parameters: ", named_parameters(dcm, typical[:, 1]))
