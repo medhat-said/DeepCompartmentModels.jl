@@ -86,6 +86,27 @@ function _gradient(::VariationalELBO{MF,PD,N}, dcm, data, ps, st) where {MF,PD<:
     return ∇_full
 end
 
+function _gradient(objective::VariationalEM, dcm, data, ps, st)
+    if dynamic(objective.path_deriv) && !(:L in keys(ps.phi))
+        throw(ArgumentError("path_deriv=true requires MeanSqrt parameters"))
+    end
+    ∇ = NamedTuple{keys(ps)}(fill(nothing, length(keys(ps))))
+    grad = Zygote.gradient(ps.theta, ps.phi, ps.error) do θ, 𝜙, σ
+        ps_local = Accessors.@set ps.theta = θ
+        ps_local = Accessors.@set ps_local.phi = 𝜙
+        ps_local = Accessors.@set ps_local.error = σ
+        if dynamic(objective.path_deriv)
+            return -_model_logjoint(objective, dcm, data, ps_local, st)
+        end
+        return objective(dcm, data, ps_local, st)
+    end
+
+    Accessors.@reset ∇.theta = grad[1]
+    Accessors.@reset ∇.phi = grad[2]
+    Accessors.@reset ∇.error = grad[3]
+    return dynamic(objective.path_deriv) ? add_path_deriv_dlogq(∇, ps, st) : ∇
+end
+
 function add_path_deriv_dlogq(∇, ps, st)
     qs = getq(ps.phi)
     η = sample_gaussian(ps.phi, st.phi)
@@ -106,7 +127,7 @@ function add_path_deriv_dlogq(∇, ps, st)
     return ∇
 end
 
-function _gradient(obj::VariationalELBO, dcm::DeepCompartmentModel{P,M}, data, batch::AbstractArray{<:Int}, ps, st) where {P<:SciMLBase.AbstractDEProblem,M<:Lux.AbstractLuxLayer}
+function _gradient(obj::Union{VariationalELBO,VariationalEM}, dcm::DeepCompartmentModel{P,M}, data, batch::AbstractArray{<:Int}, ps, st) where {P<:SciMLBase.AbstractDEProblem,M<:Lux.AbstractLuxLayer}
     ps_batch, st_batch = take_batch(ps, st, batch; exclude = dcm.error isa ErrorModelSet ? (:error) : nothing)
     grad_batch = _gradient(obj, dcm, data[batch], ps_batch, st_batch)
     # TODO: correct phi indices (potentially more to do for other models)
@@ -189,4 +210,45 @@ function residual_error_value_and_gradient(rng::Random.AbstractRNG, dcm::DeepCom
     grad = mode == :forward ? NamedTuple(_grad) : first(_grad)
 
     return only(res), Accessors.@set ∇.error = grad
+end
+
+residual_error_value_and_gradient(rng, ::Any, dcm, data, ps, st; kwargs...) =
+    residual_error_value_and_gradient(rng, dcm, data, ps, st; kwargs...)
+
+function residual_error_value_and_gradient(rng::Random.AbstractRNG,
+        objective::VariationalEM, dcm::DeepCompartmentModel, population::Population,
+        ps, st; mode::Symbol=:forward, num_samples::Int=100)
+    num_samples > 0 || throw(ArgumentError("num_samples must be positive"))
+    mode in (:forward, :reverse) || throw(ArgumentError("unknown AD mode: $mode"))
+    ∇ = NamedTuple{keys(ps)}(fill(nothing, length(keys(ps))))
+    typical, _ = predict_typ_parameters(dcm, population, ps, st)
+    individuals = @ignore_derivatives population.data
+    st_local = deepcopy(st)
+    eta_samples = map(1:num_samples) do _
+        update_epsilon!(rng, st_local)
+        sample_gaussian(ps.phi, st_local.phi)
+    end
+
+    loss_function = function (p)
+        ps_local = Accessors.@set ps.error = p
+        lls = map(eta_samples) do etas
+            map(eachindex(individuals)) do i
+                model = _individual_model(objective, dcm, individuals[i],
+                    view(typical, :, i), ps_local)
+                DynamicPPL.loglikelihood(
+                    model, _latent_values(objective, etas[i]))
+            end
+        end
+        return -sum(logsumexp.(lls) .- log(num_samples))
+    end
+
+    if mode == :forward
+        error = ComponentVector(ps.error)
+        loss = loss_function(error)
+        grad = NamedTuple(ForwardDiff.gradient(loss_function, error))
+    else
+        loss, grads = Zygote.withgradient(loss_function, ps.error)
+        grad = only(grads)
+    end
+    return loss, Accessors.@set ∇.error = grad
 end

@@ -33,4 +33,8 @@ begin
     @testset "DCM" begin
         include("dcm.test.jl")
     end
+
+    @testset "Turing VEM" begin
+        include("lib/named_vem_api.test.jl")
+    end
 end

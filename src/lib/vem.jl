@@ -8,10 +8,18 @@ function m_step(obj::VariationalELBO, rng::Random.AbstractRNG, dcm::DeepCompartm
     return Accessors.@set ps.omega = omega_opt
 end
 
+function m_step(obj::VariationalEM, rng::Random.AbstractRNG,
+        dcm::DeepCompartmentModel, population::Population, ps, st; kwargs...)
+    @info "Optimising residual error parameters"
+    ps = optimise_residual_error(obj, rng, dcm, population, ps, st; kwargs...)
+    @info "Optimising omega based on Variational posteriors"
+    return Accessors.@set ps.omega = optimise_omega(ps)
+end
+
 function optimise_residual_error(obj::Union{<:LogLikelihood,<:MixedObjective}, rng, dcm, data, ps, st; opt=Optimisers.Adam(1e-2), epochs=100, verbose::Bool = true, kwargs...)
     opt_state = Optimisers.setup(opt, ps)
     for epoch in 1:epochs
-        loss, grad = residual_error_value_and_gradient(rng, dcm, data, ps, st; kwargs...)
+        loss, grad = residual_error_value_and_gradient(rng, obj, dcm, data, ps, st; kwargs...)
         if verbose
             println("Epoch $epoch, NLL = $(loss)")
         end

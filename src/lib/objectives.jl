@@ -182,7 +182,8 @@ getq(ps::NamedTuple{(:μ, :σ²), <:Tuple{<:AbstractVector{<:AbstractVector{<:Re
 
 function getq(ps::NamedTuple{(:μ, :L), <:Tuple{<:AbstractVector{<:AbstractVector{<:Real}}, <:AbstractVector{<:LowerTriangular}}})
     Σ = map(ps.L) do L
-        Symmetric(L * L') + eltype(L).(I(size(L, 1)) * 1e-6)
+        jitter = @ignore_derivatives Diagonal(fill(eltype(L)(1e-6), size(L, 1)))
+        Symmetric(L * L') + jitter
     end
     return MvNormal.(ps.μ, Σ)
 end

@@ -101,7 +101,9 @@ function setup(
     )
     ps_params = _convert_parameters(params, ps)
     type_fn = _get_type_fn(T)
-    return (ps_params, st) |> type_fn
+    result = (ps_params, st) |> type_fn
+    _validate_vem_setup(obj, model, population, result...)
+    return result
 end
 
 function setup_phi(obj::VariationalELBO{MF}, rng::Random.AbstractRNG, ::AbstractDEModel, population::Population, Ω::Symmetric; num_params, scale::Real=0.1) where MF
@@ -121,6 +123,18 @@ function setup_phi(obj::VariationalELBO{MF}, rng::Random.AbstractRNG, ::Abstract
         epsilon = [randn(rng, size(Ω, 1)) for _ in eachindex(population)],
     )
 
+    return ps, st
+end
+
+function setup_phi(::VariationalEM, rng::Random.AbstractRNG, ::AbstractDEModel,
+        population::Population, Ω::Symmetric; scale::Real=0.1, kwargs...)
+    ps = (
+        μ = [zeros(size(Ω, 1)) for _ in eachindex(population)],
+        Σ = [scale * copy(Ω) for _ in eachindex(population)],
+    )
+    st = (
+        epsilon = [randn(rng, size(Ω, 1)) for _ in eachindex(population)],
+    )
     return ps, st
 end
 

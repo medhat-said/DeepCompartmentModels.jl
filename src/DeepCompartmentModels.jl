@@ -19,6 +19,7 @@ using Reexport
 
 @reexport using Static
 @reexport using Distributions
+import DynamicPPL
 @reexport using OrdinaryDiffEq
 @reexport using SciMLSensitivity
 
@@ -46,7 +47,7 @@ export  AbstractErrorModel, AdditiveError, ProportionalError, CombinedError,
 
 include("lib/dcm.jl");
 export  DeepCompartmentModel, DCM, predict_typ_parameters, predict_de_parameters, 
-        predict
+        predict, named_parameters
 
 include("lib/nn.jl");
 export  StandardNeuralNetwork, SNN, predict
@@ -64,6 +65,10 @@ include("lib/objectives.jl");
 export  MSE, SSE, LogLikelihood, VariationalELBO, mse, sse, 
         loglikelihood, kldivergence, logprior, logq, getq, logjoint, 
         elbo
+
+include("lib/turing_vem.jl");
+export  AbstractVariationalFamily, FullRankGaussian, LocalVariables,
+        VariationalEM, vem_noise
 
 include("lib/setup.jl");
 export  setup, setup_phi
