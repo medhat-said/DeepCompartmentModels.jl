@@ -8,10 +8,10 @@ using Plots, Random, Statistics
 import Distributions, NaturalOptimisers, Optimisers
 
 const ETA = LocalVariables(:η, (:Ka, :CL, :V))
-const INITIAL = (; Ka=0.8, CL=1.2, V=10.0)
+const INITIAL = (; Ka=1.5, CL=2.5, V=30.0)
 
 DynamicPPL.@model function theophylline_model(dcm, individual, theta, noise,
-        observation=get_y(individual))
+    observation=get_y(individual))
     η ~ Distributions.MvNormal(zeros(ETA.dimension), noise.Ω)
     eta = ETA(η)
     pars = (; Ka=theta.Ka * exp(eta.Ka),
@@ -23,13 +23,15 @@ end
 
 function load_theophylline(file)
     groups = groupby(DataFrame(CSV.File(file)), :ID)
-    return Population([begin
-        observed = group.MDV .== 0
-        dose = group.DOSE[1] * group.WEIGHT[1] # mg/kg -> mg
-        callback = generate_dosing_callback(reshape([group.TIME[1], dose], 1, 2), Float64)
-        Individual(group.ID[1], Float64[], Float64.(group.TIME[observed]),
-            Float64.(group.DV[observed]), callback, Float64)
-    end for group in groups])
+    return Population([
+        begin
+            observed = group.MDV .== 0
+            dose = group.DOSE[1] * group.WEIGHT[1] # mg/kg -> mg
+            callback = generate_dosing_callback(reshape([group.TIME[1], dose], 1, 2), Float64)
+            Individual(group.ID[1], Float64[], Float64.(group.TIME[observed]),
+                Float64.(group.DV[observed]), callback, Float64)
+        end for group in groups
+    ])
 end
 
 function setup_fit(population)
@@ -51,8 +53,8 @@ end
 function fit_settings()
     full = get(ENV, "DCM_THEO_FIT", "quick") == "full"
     defaults = full ?
-        (; cycles=10, local_epochs=25, global_epochs=20, m_epochs=5, samples=8) :
-        (; cycles=3, local_epochs=5, global_epochs=5, m_epochs=2, samples=4)
+               (; cycles=10, local_epochs=25, global_epochs=20, m_epochs=5, samples=8) :
+               (; cycles=3, local_epochs=5, global_epochs=5, m_epochs=2, samples=4)
     return (;
         cycles=parse(Int, get(ENV, "DCM_THEO_CYCLES", string(defaults.cycles))),
         local_epochs=parse(Int, get(ENV, "DCM_THEO_LOCAL_EPOCHS", string(defaults.local_epochs))),
@@ -63,14 +65,35 @@ end
 
 function fit_method(method, setup_values, population, settings)
     local_optimizer = method === :adam ? Optimisers.Adam(5e-3) :
-        NaturalOptimisers.NaturalDescent(5e-3, (0.0, 0.0); tau=1.0,
-            meanfield=false, manifold=NaturalOptimisers.RiemannianManifold())
-    fit = fit_vem(Random.Xoshiro(11), setup_values.objective, setup_values.dcm,
+                      NaturalOptimisers.NaturalDescent(5e-3, (0.0, 0.0); tau=1.0,
+        meanfield=false, manifold=NaturalOptimisers.RiemannianManifold())
+    rng = Random.Xoshiro(11)
+    fit = fit_vem(rng, setup_values.objective, setup_values.dcm,
         population, deepcopy(setup_values.ps), deepcopy(setup_values.st);
         local_optimizer, global_optimizer=Optimisers.Adam(1e-3),
-        settings..., verbose=true)
+        merge(settings, (; cycles=0))..., verbose=false)
+    fit = merge(fit, (; dcm=setup_values.dcm, objective=setup_values.objective))
+    evaluation_samples = parse(Int, get(ENV, "DCM_THEO_EVAL_SAMPLES", "16"))
+    mc_history = [(; cycle=0, negative_elbo=mc_negative_elbo(fit, population;
+        samples=evaluation_samples, seed=41))]
+    training_history = NamedTuple[]
+    for cycle in 1:settings.cycles
+        fit = fit_vem(rng, setup_values.objective, setup_values.dcm, population,
+            fit.ps, fit.st; local_optimizer, global_optimizer=Optimisers.Adam(1e-3),
+            local_opt_state=fit.local_opt_state, global_opt_state=fit.global_opt_state,
+            merge(settings, (; cycles=1))..., verbose=false)
+        fit = merge(fit, (; dcm=setup_values.dcm, objective=setup_values.objective))
+        push!(training_history, (; cycle,
+            negative_elbo=only(fit.history).negative_elbo))
+        value = mc_negative_elbo(fit, population;
+            samples=evaluation_samples, seed=41)
+        push!(mc_history, (; cycle, negative_elbo=value))
+        println("$(method) cycle $cycle: MC negative ELBO = $value")
+    end
     return merge(fit, (; method, dcm=setup_values.dcm,
-        builder=setup_values.builder, objective=setup_values.objective))
+        builder=setup_values.builder, objective=setup_values.objective,
+        settings, history=training_history, mc_history,
+        completed_cycles=settings.cycles))
 end
 
 function mc_negative_elbo(fit, population; samples=32, seed=41)
@@ -91,8 +114,7 @@ function estimate_row(label, fit, population)
         IIV_V=omega_sd[3], Rho_Ka_CL=correlation[1, 2],
         Rho_Ka_V=correlation[1, 3], Rho_CL_V=correlation[2, 3],
         Residual_SD=vem_noise(fit.dcm, fit.ps).σ,
-        MC_negative_ELBO=mc_negative_elbo(fit, population;
-            samples=parse(Int, get(ENV, "DCM_THEO_EVAL_SAMPLES", "16"))))
+        MC_negative_ELBO=last(fit.mc_history).negative_elbo)
 end
 
 function posterior_curves(fit, population, i, grid; draws=100, seed=1000 + i)
@@ -110,19 +132,20 @@ end
 function curve_interval(curves)
     values = reduce(hcat, curves)
     summaries = [[quantile(collect(row), probability)
-        for probability in (0.025, 0.5, 0.975)] for row in eachrow(values)]
+                  for probability in (0.025, 0.5, 0.975)] for row in eachrow(values)]
     return reduce(hcat, summaries)
 end
 
 function plot_comparison(adam_fit, natural_fit, population; draws=100)
-    columns = min(3, length(population)); rows = cld(length(population), columns)
+    columns = min(3, length(population));
+    rows = cld(length(population), columns)
     figure = plot(layout=(rows, columns), size=(360 * columns, 260 * rows),
         link=:both, xlabel="Time (h)", ylabel="Concentration (mg/L)")
     for i in eachindex(population)
         individual = population[i]
         grid = collect(range(0.0, maximum(get_t(individual)); length=250))
         for (fit, label, colour) in ((adam_fit, "Adam q", :steelblue),
-                (natural_fit, "Natural q", :darkorange))
+            (natural_fit, "Natural q", :darkorange))
             interval = curve_interval(posterior_curves(fit, population, i, grid; draws))
             plot!(figure, grid, interval[2, :]; subplot=i, label=i == 1 ? label : "",
                 ribbon=(interval[2, :] - interval[1, :], interval[3, :] - interval[2, :]),
@@ -131,6 +154,18 @@ function plot_comparison(adam_fit, natural_fit, population; draws=100)
         scatter!(figure, get_t(individual), get_y(individual); subplot=i,
             label=i == 1 ? "Observed" : "", color=:black, markersize=3, markerstrokewidth=0,
             title="Individual $(individual.id)")
+    end
+    return figure
+end
+
+function plot_elbo(adam_fit, natural_fit)
+    figure = plot(xlabel="VEM cycle", ylabel="MC negative ELBO (lower is better)",
+        markershape=:circle, linewidth=2)
+    for (fit, label, colour) in ((adam_fit, "Adam q", :steelblue),
+            (natural_fit, "Natural q", :darkorange))
+        plot!(figure, getproperty.(fit.mc_history, :cycle),
+            getproperty.(fit.mc_history, :negative_elbo);
+            label, color=colour)
     end
     return figure
 end
@@ -156,9 +191,18 @@ println(comparison)
 output = joinpath(@__DIR__, "output")
 mkpath(output)
 CSV.write(joinpath(output, "theophylline_vem_estimates.csv"), comparison)
+elbo_history = vcat(
+    DataFrame(Method="Adam q", Cycle=getproperty.(adam_fit.mc_history, :cycle),
+        MC_negative_ELBO=getproperty.(adam_fit.mc_history, :negative_elbo)),
+    DataFrame(Method="Natural q", Cycle=getproperty.(natural_fit.mc_history, :cycle),
+        MC_negative_ELBO=getproperty.(natural_fit.mc_history, :negative_elbo)))
+CSV.write(joinpath(output, "theophylline_vem_elbo.csv"), elbo_history)
 if get(ENV, "DCM_THEO_PLOT", "1") == "1"
     figure = plot_comparison(adam_fit, natural_fit, population;
         draws=parse(Int, get(ENV, "DCM_THEO_PLOT_DRAWS", "100")))
     savefig(figure, joinpath(output, "theophylline_vem_profiles.png"))
+    elbo_figure = plot_elbo(adam_fit, natural_fit)
+    savefig(elbo_figure, joinpath(output, "theophylline_vem_elbo.png"))
     display(figure)
+    display(elbo_figure)
 end
