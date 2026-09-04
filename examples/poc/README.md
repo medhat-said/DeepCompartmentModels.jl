@@ -9,6 +9,17 @@ julia --project=examples/poc examples/poc/turing_model_vem.jl
 julia --project=examples/poc examples/poc/turing_natural_vem.jl
 ```
 
+For the real Theophylline comparison, open `theophylline_vem_comparison.jl` in
+VS Code and run **Julia: Execute Active File**, or use:
+
+```sh
+julia --project=examples/poc examples/poc/theophylline_vem_comparison.jl
+DCM_THEO_FIT=full julia --project=examples/poc examples/poc/theophylline_vem_comparison.jl
+```
+
+It fits IIV on Ka, CL, and V with both local-q backends, writes a parameter
+comparison CSV, and overlays their individual 95% curve bands with observations.
+
 - `turing_model_vem.jl` calls `fit_vem` with Adam for q.
 - `turing_natural_vem.jl` calls the same API with NaturalDescent. DCM retains
   Adam for typical parameters, its residual update, and its analytic Ω update.

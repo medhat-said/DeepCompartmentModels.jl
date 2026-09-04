@@ -1,0 +1,164 @@
+# Open this file in VS Code and run "Julia: Execute Active File".
+import Pkg
+project_file = joinpath(@__DIR__, "Project.toml")
+Base.active_project() == project_file || Pkg.activate(@__DIR__)
+
+using CSV, DataFrames, DeepCompartmentModels, DynamicPPL, LinearAlgebra
+using Plots, Random, Statistics
+import Distributions, NaturalOptimisers, Optimisers
+
+const ETA = LocalVariables(:η, (:Ka, :CL, :V))
+const INITIAL = (; Ka=0.8, CL=1.2, V=10.0)
+
+DynamicPPL.@model function theophylline_model(dcm, individual, theta, noise,
+        observation=get_y(individual))
+    η ~ Distributions.MvNormal(zeros(ETA.dimension), noise.Ω)
+    eta = ETA(η)
+    pars = (; Ka=theta.Ka * exp(eta.Ka),
+        CL=theta.CL * exp(eta.CL), V=theta.V * exp(eta.V))
+    prediction = DeepCompartmentModels.predict(dcm, individual, pars)
+    observation ~ Distributions.MvNormal(prediction, noise.σ^2 * I)
+    return (; pars, prediction)
+end
+
+function load_theophylline(file)
+    groups = groupby(DataFrame(CSV.File(file)), :ID)
+    return Population([begin
+        observed = group.MDV .== 0
+        dose = group.DOSE[1] * group.WEIGHT[1] # mg/kg -> mg
+        callback = generate_dosing_callback(reshape([group.TIME[1], dose], 1, 2), Float64)
+        Individual(group.ID[1], Float64[], Float64.(group.TIME[observed]),
+            Float64.(group.DV[observed]), callback, Float64)
+    end for group in groups])
+end
+
+function setup_fit(population)
+    init_global(_, dims...) = reshape(log.(expm1.(collect(INITIAL))), dims...)
+    layer = AddGlobalParameters(length(INITIAL), 1:length(INITIAL), Float64;
+        init_theta=init_global, activation=Lux.softplus)
+    dcm = DCM(one_comp_abs!, layer, AdditiveError(1.0);
+        target=2, parameter_names=keys(INITIAL))
+    builder(individual, theta, noise) = theophylline_model(dcm, individual, theta, noise)
+    objective = VariationalEM(builder; local_variables=ETA)
+    ps, st = setup(objective, Random.Xoshiro(1), dcm, population, Float64;
+        init_omega=0.09)
+    L = LowerTriangular(0.2 * Matrix{Float64}(I, ETA.dimension, ETA.dimension))
+    phi = (; μ=[zeros(ETA.dimension) for _ in population],
+        L=[copy(L) for _ in population])
+    return (; dcm, builder, objective, ps=merge(ps, (; phi)), st)
+end
+
+function fit_settings()
+    full = get(ENV, "DCM_THEO_FIT", "quick") == "full"
+    defaults = full ?
+        (; cycles=10, local_epochs=25, global_epochs=20, m_epochs=5, samples=8) :
+        (; cycles=3, local_epochs=5, global_epochs=5, m_epochs=2, samples=4)
+    return (;
+        cycles=parse(Int, get(ENV, "DCM_THEO_CYCLES", string(defaults.cycles))),
+        local_epochs=parse(Int, get(ENV, "DCM_THEO_LOCAL_EPOCHS", string(defaults.local_epochs))),
+        global_epochs=parse(Int, get(ENV, "DCM_THEO_GLOBAL_EPOCHS", string(defaults.global_epochs))),
+        m_epochs=parse(Int, get(ENV, "DCM_THEO_M_EPOCHS", string(defaults.m_epochs))),
+        samples=parse(Int, get(ENV, "DCM_THEO_SAMPLES", string(defaults.samples))))
+end
+
+function fit_method(method, setup_values, population, settings)
+    local_optimizer = method === :adam ? Optimisers.Adam(5e-3) :
+        NaturalOptimisers.NaturalDescent(5e-3, (0.0, 0.0); tau=1.0,
+            meanfield=false, manifold=NaturalOptimisers.RiemannianManifold())
+    fit = fit_vem(Random.Xoshiro(11), setup_values.objective, setup_values.dcm,
+        population, deepcopy(setup_values.ps), deepcopy(setup_values.st);
+        local_optimizer, global_optimizer=Optimisers.Adam(1e-3),
+        settings..., verbose=true)
+    return merge(fit, (; method, dcm=setup_values.dcm,
+        builder=setup_values.builder, objective=setup_values.objective))
+end
+
+function mc_negative_elbo(fit, population; samples=32, seed=41)
+    rng = Random.Xoshiro(seed)
+    state = deepcopy(fit.st)
+    return mean(1:samples) do _
+        update_epsilon!(rng, state)
+        fit.objective(fit.dcm, population, fit.ps, state)
+    end
+end
+
+function estimate_row(label, fit, population)
+    typical, _ = predict_typ_parameters(fit.dcm, population, fit.ps, fit.st)
+    theta = named_parameters(fit.dcm, typical[:, 1])
+    omega_sd = sqrt.(diag(fit.ps.omega))
+    correlation = fit.ps.omega ./ (omega_sd * omega_sd')
+    return (; Method=label, theta..., IIV_Ka=omega_sd[1], IIV_CL=omega_sd[2],
+        IIV_V=omega_sd[3], Rho_Ka_CL=correlation[1, 2],
+        Rho_Ka_V=correlation[1, 3], Rho_CL_V=correlation[2, 3],
+        Residual_SD=vem_noise(fit.dcm, fit.ps).σ,
+        MC_negative_ELBO=mc_negative_elbo(fit, population;
+            samples=parse(Int, get(ENV, "DCM_THEO_EVAL_SAMPLES", "16"))))
+end
+
+function posterior_curves(fit, population, i, grid; draws=100, seed=1000 + i)
+    rng = Random.Xoshiro(seed)
+    typical, _ = predict_typ_parameters(fit.dcm, population, fit.ps, fit.st)
+    theta = named_parameters(fit.dcm, typical[:, i])
+    model = fit.builder(population[i], theta, vem_noise(fit.dcm, fit.ps))
+    covariance = Matrix(fit.ps.phi.L[i] * fit.ps.phi.L[i]')
+    latent_draws = rand(rng, Distributions.MvNormal(fit.ps.phi.μ[i], covariance), draws)
+    return [DeepCompartmentModels.predict(fit.dcm, population[i],
+        DynamicPPL.returned(model, ETA.pack(latent_draws[:, draw])).pars;
+        saveat=grid) for draw in 1:draws]
+end
+
+function curve_interval(curves)
+    values = reduce(hcat, curves)
+    summaries = [[quantile(collect(row), probability)
+        for probability in (0.025, 0.5, 0.975)] for row in eachrow(values)]
+    return reduce(hcat, summaries)
+end
+
+function plot_comparison(adam_fit, natural_fit, population; draws=100)
+    columns = min(3, length(population)); rows = cld(length(population), columns)
+    figure = plot(layout=(rows, columns), size=(360 * columns, 260 * rows),
+        link=:both, xlabel="Time (h)", ylabel="Concentration (mg/L)")
+    for i in eachindex(population)
+        individual = population[i]
+        grid = collect(range(0.0, maximum(get_t(individual)); length=250))
+        for (fit, label, colour) in ((adam_fit, "Adam q", :steelblue),
+                (natural_fit, "Natural q", :darkorange))
+            interval = curve_interval(posterior_curves(fit, population, i, grid; draws))
+            plot!(figure, grid, interval[2, :]; subplot=i, label=i == 1 ? label : "",
+                ribbon=(interval[2, :] - interval[1, :], interval[3, :] - interval[2, :]),
+                color=colour, fillalpha=0.12, linewidth=2)
+        end
+        scatter!(figure, get_t(individual), get_y(individual); subplot=i,
+            label=i == 1 ? "Observed" : "", color=:black, markersize=3, markerstrokewidth=0,
+            title="Individual $(individual.id)")
+    end
+    return figure
+end
+
+data_file = get(ENV, "DCM_DATA_FILE",
+    joinpath(@__DIR__, "..", "..", ".scratch", "theophylline_nmready.csv"))
+isfile(data_file) || error("Dataset not found: $data_file")
+population = load_theophylline(data_file)
+setup_values = setup_fit(population)
+settings = fit_settings()
+
+println("Fitting standard Gaussian VI (Adam)...")
+adam_fit = fit_method(:adam, setup_values, population, settings)
+println("Fitting NaturalOptimisers Gaussian VI...")
+natural_fit = fit_method(:natural, setup_values, population, settings)
+
+comparison = DataFrame([
+    estimate_row("Adam q", adam_fit, population),
+    estimate_row("Natural q", natural_fit, population),
+])
+println(comparison)
+
+output = joinpath(@__DIR__, "output")
+mkpath(output)
+CSV.write(joinpath(output, "theophylline_vem_estimates.csv"), comparison)
+if get(ENV, "DCM_THEO_PLOT", "1") == "1"
+    figure = plot_comparison(adam_fit, natural_fit, population;
+        draws=parse(Int, get(ENV, "DCM_THEO_PLOT_DRAWS", "100")))
+    savefig(figure, joinpath(output, "theophylline_vem_profiles.png"))
+    display(figure)
+end
