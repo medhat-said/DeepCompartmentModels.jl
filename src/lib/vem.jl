@@ -1,10 +1,10 @@
-# TODO: 
 """
-    fit_vem(rng, objective, dcm, population, ps, st; local_optimizer, ...)
+    fit_vem(rng, objective, dcm, population, ps, st; local_optimizer, global_optimizer, ...)
 
-Run the existing VEM schedule with a selectable optimiser for each individual
-Gaussian `q(η)`. `samples` controls NaturalDescent and M-step Monte Carlo; the
-standard DCM gradient uses one reparameterized draw per local epoch.
+Alternate local Gaussian-q updates, `ps.theta` updates, and the existing M-step.
+`local_optimizer` selects the q backend; its state is returned for resuming.
+`samples` applies to NaturalDescent and the M-step. The standard DCM q gradient uses
+one reparameterized sample per local epoch.
 """
 function fit_vem(rng::Random.AbstractRNG, objective::VariationalEM,
         dcm::DeepCompartmentModel, population::Population, ps, st;
@@ -19,6 +19,7 @@ function fit_vem(rng::Random.AbstractRNG, objective::VariationalEM,
     m_epochs >= 0 || throw(ArgumentError("m_epochs must be nonnegative"))
     samples > 0 || throw(ArgumentError("samples must be positive"))
 
+    _validate_local_vi(local_optimizer, objective.family, objective)
     local_state = isnothing(local_opt_state) ?
         _setup_local_vi(local_optimizer, objective.family, objective, population, ps) :
         local_opt_state
@@ -58,6 +59,17 @@ function fit_vem(rng::Random.AbstractRNG, objective::VariationalEM,
         individual_ids=[individual.id for individual in population],
         settings, history, completed_cycles=cycles)
 end
+
+# Local VI backend contract. Extensions dispatch on their rule and family; core treats
+# the returned optimiser state as opaque.
+#
+#   _setup_local_vi(rule, family, objective, population, ps) -> opt_state
+#   _run_local_vi(rng, rule, family, opt_state, objective, dcm, population, ps, st;
+#                 epochs, samples) -> (opt_state, ps)
+#
+# The exchange format is `ps.phi = (μ, L)`, with `Σ = L * L'`.
+
+_validate_local_vi(::Optimisers.AbstractRule, ::AbstractVariationalFamily, objective) = nothing
 
 _setup_local_vi(optimizer::Optimisers.AbstractRule, ::AbstractVariationalFamily,
         objective, population, ps) = Optimisers.setup(optimizer, ps.phi)

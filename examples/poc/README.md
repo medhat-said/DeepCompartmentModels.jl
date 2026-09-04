@@ -31,17 +31,20 @@ already in `logjoint`, so neither prior nor entropy is added again. The POC uses
 
 ## Current limitations
 
-- This is a two-individual, two-ETA synthetic data example, not a fit assessment.
-- There is no convergence rule, ELBO history, multi-seed comparison, or runtime
-  benchmark in these two shareable scripts.
+- These scripts are a two-individual, two-ETA synthetic data example, not a fit
+  assessment. The number of ETAs is not a limitation of the API: it follows the
+  `LocalVariables` declaration. Tests cover 1, 2, 3, 5, and 12 dimensions; the
+  two-dimensional case is compared with an analytic posterior.
+- `fit.history` contains a stochastic negative-ELBO trace, but there is no automatic
+  convergence rule, multi-seed assessment, or runtime benchmark.
 - Typical parameters, Ω, and residual scale are point estimates; this is not fully
   Bayesian population inference and does not propagate their uncertainty.
-- The selectable NaturalDescent backend currently supports only a full-covariance
-  Riemannian Gaussian with `tau=1`.
+- The selectable NaturalDescent backend supports full-covariance Gaussian rules on
+  its Riemannian, Lie-group, and Euclidean manifolds, with `tau=1`.
 - Its extension isolates, but still depends on, NaturalOptimisers 0.2 internals
   for Gaussian initialization and moment extraction.
-- Checkpoint serialization, GPU use, arbitrary latent structures, missing data,
-  real PK data, NN covariates, and larger/stiff ODE systems are not demonstrated.
+- Checkpoint serialization, GPU use, missing data, real PK data, NN covariates,
+  and larger/stiff ODE systems are not demonstrated.
 - The existing DCM residual M-step is reused but its statistical objective has not
   been validated here; successful execution does not validate the full VEM loop.
 
@@ -50,7 +53,7 @@ already in `logjoint`, so neither prior nor entropy is added again. The POC uses
 1. Should this model-builder/`LocalVariables` boundary become the public DCM API?
 2. Should NaturalOptimisers expose public Gaussian initialization and moment
    extraction so the extension no longer accesses its state representation?
-3. Should the backend own individual state while DCM receives only exported
-   `(μ, Σ)` moments at M-step and prediction boundaries?
-4. Should covariance, precision, or a Cholesky factor be the exchange format?
-5. Is `fit_vem(...; local_optimizer=...)` the desired public backend-selection API?
+3. Is `fit_vem(...; local_optimizer=...)` the desired public backend-selection API?
+
+The current contract keeps backend state outside `ps` and exchanges `μ` plus the
+covariance Cholesky factor `L` at DCM boundaries.

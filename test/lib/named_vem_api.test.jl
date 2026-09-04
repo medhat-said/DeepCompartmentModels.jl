@@ -6,13 +6,20 @@ using ForwardDiff, Zygote
 @test Base.get_extension(DeepCompartmentModels, :DCMDynamicPPLExt) !== nothing
 
 DynamicPPL.@model function api_model(theta, noise, observation=0.0)
-    η ~ MvNormal(zeros(2), noise.Ω)
+    η ~ MvNormal(zeros(eltype(noise.Ω), size(noise.Ω, 1)), noise.Ω)
     observation ~ Normal(theta.CL + η[1], noise.σ)
     return (; theta, noise)
 end
 
-DynamicPPL.@model function extra_site_model(theta, noise)
+# A model that fixes its own latent dimension instead of using `noise.prior`, used to
+# check that a disagreement with the LocalVariables declaration is still reported.
+DynamicPPL.@model function fixed_dim_model(theta, noise, observation=0.0)
     η ~ MvNormal(zeros(2), noise.Ω)
+    observation ~ Normal(theta.CL + η[1], noise.σ)
+end
+
+DynamicPPL.@model function extra_site_model(theta, noise)
+    η ~ MvNormal(zeros(eltype(noise.Ω), size(noise.Ω, 1)), noise.Ω)
     unwanted ~ Normal()
 end
 
@@ -43,6 +50,19 @@ end
     @test_throws ArgumentError LocalVariables(:η, (:CL, :CL))
     @test_throws ArgumentError LocalVariables(:η, ())
     @test_throws ArgumentError LocalVariables(:η, (:CL, "V"))
+
+    # Anonymous components: the dimension alone declares the site.
+    for dimension in (1, 3, 12)
+        anonymous = LocalVariables(:η, dimension)
+        @test anonymous.dimension == dimension
+        @test anonymous.site == :η
+        @test anonymous.names == ()
+        @test anonymous.pack(ones(dimension)) == (; η=ones(dimension))
+        # Named access is only available when component names were declared.
+        @test_throws ArgumentError anonymous(ones(dimension))
+    end
+    @test_throws ArgumentError LocalVariables(:η, 0)
+    @test_throws ArgumentError LocalVariables(:η, -1)
 
     theta = named_parameters(dcm, [1.0, 0.2, 2.0])
     @test theta == (; Ka=1.0, CL=0.2, V=2.0)
@@ -86,10 +106,16 @@ end
 
     @test_throws UndefKeywordError VariationalEM(builder)
 
+    # A model may still fix its own latent dimension; a disagreement with the declaration
+    # is reported by `setup`.
+    fixed = VariationalEM((i, t, n) -> fixed_dim_model(t, n); local_variables=locals)
+    @test isfinite(fixed(dcm, population, ps, st))
+    wrong_size = VariationalEM((i, t, n) -> fixed_dim_model(t, n);
+        local_variables=LocalVariables(:η, (:CL,)))
+    @test_throws DimensionMismatch setup(wrong_size, Random.Xoshiro(1), dcm, population)
+
     wrong_site = VariationalEM(builder; local_variables=LocalVariables(:wrong, (:CL, :V)))
     @test_throws ErrorException setup(wrong_site, Random.Xoshiro(1), dcm, population)
-    wrong_size = VariationalEM(builder; local_variables=LocalVariables(:η, (:CL,)))
-    @test_throws DimensionMismatch setup(wrong_size, Random.Xoshiro(1), dcm, population)
     extra = VariationalEM((i, t, n) -> extra_site_model(t, n); local_variables=locals)
     @test_throws ErrorException setup(extra, Random.Xoshiro(1), dcm, population)
     absent = VariationalEM((i, t, n) -> no_site_model(t, n); local_variables=locals)

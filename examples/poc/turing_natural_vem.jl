@@ -7,7 +7,7 @@ const LOCAL_VARIABLES = LocalVariables(:η, (:CL, :V))
 
 DynamicPPL.@model function individual_model(dcm, individual, theta, noise,
         observation=get_y(individual))
-    η ~ MvNormal(zeros(LOCAL_VARIABLES.dimension), noise.Ω)
+    η ~ MvNormal(zeros(eltype(noise.Ω), size(noise.Ω, 1)), noise.Ω)
     eta = LOCAL_VARIABLES(η)
     pars = (; Ka=theta.Ka, CL=theta.CL * exp(eta.CL), V=theta.V * exp(eta.V))
     prediction = DeepCompartmentModels.predict(dcm, individual, pars)
