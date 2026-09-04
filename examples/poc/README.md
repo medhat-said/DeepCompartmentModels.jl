@@ -14,12 +14,12 @@ VS Code and run **Julia: Execute Active File**, or use:
 
 ```sh
 julia --project=examples/poc examples/poc/theophylline_vem_comparison.jl
-DCM_THEO_FIT=full julia --project=examples/poc examples/poc/theophylline_vem_comparison.jl
 ```
 
 It fits IIV on Ka, CL, and V with both local-q backends, writes a parameter
 comparison CSV, plots a per-cycle MC negative ELBO, and overlays their individual
-95% curve bands with observations.
+95% curve bands with observations. Edit `FIT_OPTIONS` at the top of the script to
+set method-specific optimization effort and learning rates.
 
 - `turing_model_vem.jl` calls `fit_vem` with Adam for q.
 - `turing_natural_vem.jl` calls the same API with NaturalDescent. DCM retains

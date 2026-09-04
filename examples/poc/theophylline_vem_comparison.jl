@@ -9,6 +9,14 @@ import Distributions, NaturalOptimisers, Optimisers
 
 const ETA = LocalVariables(:η, (:Ka, :CL, :V))
 const INITIAL = (; Ka=1.5, CL=2.5, V=30.0)
+const FIT_OPTIONS = (;
+    cycles=20,
+    adam=(epochs=50, rate=5e-3),
+    natural=(epochs=20, samples=8, rate=5e-3),
+    global_step=(epochs=40, rate=1e-3),
+    residual_epochs=8, # Reduce if the MC negative ELBO turns upward.
+    evaluation_samples=32,
+)
 
 DynamicPPL.@model function theophylline_model(dcm, individual, theta, noise,
     observation=get_y(individual))
@@ -50,36 +58,30 @@ function setup_fit(population)
     return (; dcm, builder, objective, ps=merge(ps, (; phi)), st)
 end
 
-function fit_settings()
-    full = get(ENV, "DCM_THEO_FIT", "quick") == "full"
-    defaults = full ?
-               (; cycles=10, local_epochs=25, global_epochs=20, m_epochs=5, samples=8) :
-               (; cycles=3, local_epochs=5, global_epochs=5, m_epochs=2, samples=4)
-    return (;
-        cycles=parse(Int, get(ENV, "DCM_THEO_CYCLES", string(defaults.cycles))),
-        local_epochs=parse(Int, get(ENV, "DCM_THEO_LOCAL_EPOCHS", string(defaults.local_epochs))),
-        global_epochs=parse(Int, get(ENV, "DCM_THEO_GLOBAL_EPOCHS", string(defaults.global_epochs))),
-        m_epochs=parse(Int, get(ENV, "DCM_THEO_M_EPOCHS", string(defaults.m_epochs))),
-        samples=parse(Int, get(ENV, "DCM_THEO_SAMPLES", string(defaults.samples))))
-end
-
-function fit_method(method, setup_values, population, settings)
-    local_optimizer = method === :adam ? Optimisers.Adam(5e-3) :
-                      NaturalOptimisers.NaturalDescent(5e-3, (0.0, 0.0); tau=1.0,
+function fit_method(method, setup_values, population, options)
+    local_settings = getproperty(options, method)
+    local_optimizer = method === :adam ? Optimisers.Adam(local_settings.rate) :
+                      NaturalOptimisers.NaturalDescent(local_settings.rate, (0.0, 0.0); tau=1.0,
         meanfield=false, manifold=NaturalOptimisers.RiemannianManifold())
+    cycles = parse(Int, get(ENV, "DCM_THEO_CYCLES", string(options.cycles)))
+    evaluation_samples = parse(Int, get(ENV, "DCM_THEO_EVAL_SAMPLES",
+        string(options.evaluation_samples)))
+    settings = (; cycles, local_epochs=local_settings.epochs,
+        global_epochs=options.global_step.epochs, m_epochs=options.residual_epochs,
+        samples=options.natural.samples)
+    global_optimizer = Optimisers.Adam(options.global_step.rate)
     rng = Random.Xoshiro(11)
     fit = fit_vem(rng, setup_values.objective, setup_values.dcm,
         population, deepcopy(setup_values.ps), deepcopy(setup_values.st);
-        local_optimizer, global_optimizer=Optimisers.Adam(1e-3),
+        local_optimizer, global_optimizer,
         merge(settings, (; cycles=0))..., verbose=false)
     fit = merge(fit, (; dcm=setup_values.dcm, objective=setup_values.objective))
-    evaluation_samples = parse(Int, get(ENV, "DCM_THEO_EVAL_SAMPLES", "16"))
     mc_history = [(; cycle=0, negative_elbo=mc_negative_elbo(fit, population;
         samples=evaluation_samples, seed=41))]
     training_history = NamedTuple[]
     for cycle in 1:settings.cycles
         fit = fit_vem(rng, setup_values.objective, setup_values.dcm, population,
-            fit.ps, fit.st; local_optimizer, global_optimizer=Optimisers.Adam(1e-3),
+            fit.ps, fit.st; local_optimizer, global_optimizer,
             local_opt_state=fit.local_opt_state, global_opt_state=fit.global_opt_state,
             merge(settings, (; cycles=1))..., verbose=false)
         fit = merge(fit, (; dcm=setup_values.dcm, objective=setup_values.objective))
@@ -175,12 +177,11 @@ data_file = get(ENV, "DCM_DATA_FILE",
 isfile(data_file) || error("Dataset not found: $data_file")
 population = load_theophylline(data_file)
 setup_values = setup_fit(population)
-settings = fit_settings()
 
 println("Fitting standard Gaussian VI (Adam)...")
-adam_fit = fit_method(:adam, setup_values, population, settings)
+adam_fit = fit_method(:adam, setup_values, population, FIT_OPTIONS)
 println("Fitting NaturalOptimisers Gaussian VI...")
-natural_fit = fit_method(:natural, setup_values, population, settings)
+natural_fit = fit_method(:natural, setup_values, population, FIT_OPTIONS)
 
 comparison = DataFrame([
     estimate_row("Adam q", adam_fit, population),
