@@ -24,6 +24,8 @@ set method-specific optimization effort and learning rates.
 - `turing_model_vem.jl` calls `fit_vem` with Adam for q.
 - `turing_natural_vem.jl` calls the same API with NaturalDescent. DCM retains
   Adam for typical parameters, its residual update, and its analytic Ω update.
+- `theophylline_natural_vem_minimal.jl` is the shortest real-data Natural VEM
+  example, including a basic observed-versus-individual-predicted plot.
 
 The natural POC keeps persistent state per individual and exports moment copies
 to `ps.phi`. Population parameters remain point estimates.
