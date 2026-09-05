@@ -21,18 +21,20 @@ const FIT = (;
 function load_theophylline(file)
     # CHANGE: column names and dosing construction for another dataset.
     groups = groupby(DataFrame(CSV.File(file)), :ID)
-    individuals = [begin
-        observed = group.MDV .== 0
-        dose = group.DOSE[1] * group.WEIGHT[1] # mg/kg -> mg
-        callback = generate_dosing_callback(reshape([group.TIME[1], dose], 1, 2), Float64)
-        Individual(group.ID[1], Float64[], Float64.(group.TIME[observed]),
-            Float64.(group.DV[observed]), callback, Float64)
-    end for group in groups]
+    individuals = [
+        begin
+            observed = group.MDV .== 0
+            dose = group.DOSE[1] * group.WEIGHT[1] # mg/kg -> mg
+            callback = generate_dosing_callback(reshape([group.TIME[1], dose], 1, 2), Float64)
+            Individual(group.ID[1], Float64[], Float64.(group.TIME[observed]),
+                Float64.(group.DV[observed]), callback, Float64)
+        end for group in groups
+    ]
     return Population(individuals)
 end
 
 DynamicPPL.@model function individual_model(dcm, individual, theta, noise,
-        observation=get_y(individual))
+    observation=get_y(individual))
     η ~ Distributions.MvNormal(zeros(ETA.dimension), noise.Ω)
     eta = ETA(η)
     # CHANGE: covariate and IIV relationships belong here.
