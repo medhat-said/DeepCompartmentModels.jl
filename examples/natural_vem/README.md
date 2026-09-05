@@ -12,8 +12,7 @@ julia --project=examples/natural_vem -e 'using Pkg; Pkg.instantiate()'
 julia --project=examples/natural_vem examples/natural_vem/theophylline.jl
 ```
 
-The dataset is not distributed with the example. It defaults to
-`.scratch/theophylline_nmready.csv`; set `DCM_DATA_FILE` to use another path.
+for the data, set `DCM_DATA_FILE` to use another path.
 Edit `ETA`, `INITIAL`, `FIT`, the individual model, and the DCM construction at
 the marked `# CHANGE:` locations for another project.
 
