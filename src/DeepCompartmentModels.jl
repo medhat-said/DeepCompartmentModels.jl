@@ -66,8 +66,7 @@ export  MSE, SSE, LogLikelihood, VariationalELBO, mse, sse,
         elbo
 
 include("lib/variational_em.jl");
-export  AbstractVariationalFamily, FullRankGaussian, LocalVariables,
-        VariationalEM, vem_noise
+export  FullRankGaussian, LocalVariables, VariationalEM, vem_noise
 
 include("lib/setup.jl");
 export  setup, setup_phi

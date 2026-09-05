@@ -1,4 +1,4 @@
-module NaturalVEMBackendTests
+module NaturalOptimisersVEMTests
 
 using DeepCompartmentModels, DynamicPPL, ForwardDiff, LinearAlgebra
 using NaturalOptimisers, Random, Statistics, Test
@@ -63,7 +63,7 @@ end
     model = gaussian_model(population[1], noise)
     eta = [0.1, -0.2]
     density_gradient = ForwardDiff.gradient(eta) do value
-        -DeepCompartmentModels._individual_logjoint(model, LOCALS.pack(value))
+        -DeepCompartmentModels._individual_logjoint(model, (; η=value))
     end
     @test density_gradient ≈ eta + 4 .* (eta - get_y(population[1]))
 
@@ -165,7 +165,7 @@ end
     noise = vem_noise(dcm, ps)
     model = gaussian_model(population[1], noise)
     widened = ForwardDiff.gradient(Float32[0.1, -0.2]) do value
-        -DeepCompartmentModels._individual_logjoint(model, LOCALS.pack(value))
+        -DeepCompartmentModels._individual_logjoint(model, (; η=value))
     end
     @test eltype(widened) == Float64
 

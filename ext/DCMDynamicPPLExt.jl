@@ -8,10 +8,8 @@ function DCM._validate_individual_model(
         model::DynamicPPL.Model, locals::DCM.LocalVariables, values)
     vi = DynamicPPL.VarInfo(
         Random.Xoshiro(0), model, DynamicPPL.InitFromParams(values, nothing))
-    if !isnothing(locals.site)
-        collect(keys(vi)) == [DynamicPPL.VarName{locals.site}()] ||
-            throw(ArgumentError("individual model must sample only the declared local site"))
-    end
+    collect(keys(vi)) == [DynamicPPL.VarName{locals.site}()] ||
+        throw(ArgumentError("individual model must sample only the declared local site"))
     return nothing
 end
 

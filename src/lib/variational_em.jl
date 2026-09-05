@@ -6,7 +6,6 @@ struct FullRankGaussian <: AbstractVariationalFamily end
 """
     LocalVariables(site::Symbol, names::Tuple)
     LocalVariables(site::Symbol, dimension::Int)
-    LocalVariables(dimension::Int, pack, site=nothing, names=())
 
 Declare the vector-valued local site of an individual model, i.e. the random effects
 `η` estimated per individual. `setup` sizes `Ω` and the variational posteriors from
@@ -20,7 +19,6 @@ for a large number of random effects.
 - `site::Symbol`: Name the model samples the latent vector under, e.g. `:η`.
 - `names::Tuple`: Component names in latent order. One name per dimension.
 - `dimension::Int`: Number of latent dimensions, when the components are unnamed.
-- `pack`: Function mapping a latent vector to the values passed to the model backend.
 
 # Examples
 ```julia
@@ -28,30 +26,34 @@ LocalVariables(:η, (:CL, :V))  # two named random effects
 LocalVariables(:η, 12)         # twelve anonymous random effects
 ```
 """
-struct LocalVariables{P,N}
-    dimension::Int
-    pack::P
-    site::Union{Symbol,Nothing}
+struct LocalVariables{N<:Tuple}
+    site::Symbol
     names::N
-    function LocalVariables(dimension::Int, pack::P, site=nothing, names::N=()) where {P,N}
+    dimension::Int
+    function LocalVariables(site::Symbol, names::N, dimension::Int) where {N<:Tuple}
         dimension > 0 || throw(ArgumentError("dimension must be positive"))
-        new{P,N}(dimension, pack, site, names)
+        isempty(names) || length(names) == dimension ||
+            throw(DimensionMismatch("names must match dimension"))
+        new{N}(site, names, dimension)
     end
 end
 
 function LocalVariables(site::Symbol, names::Tuple)
     _validate_names(names)
-    return LocalVariables(length(names), _packer(site), site, names)
+    isempty(names) && throw(ArgumentError("names must not be empty"))
+    return LocalVariables(site, names, length(names))
 end
 
-LocalVariables(site::Symbol, dimension::Int) =
-    LocalVariables(dimension, _packer(site), site, ())
-
-_packer(site::Symbol) = η -> NamedTuple{(site,)}((η,))
+function LocalVariables(site::Symbol, dimension::Int)
+    dimension > 0 || throw(ArgumentError("dimension must be positive"))
+    return LocalVariables(site, (), dimension)
+end
 
 function (locals::LocalVariables)(η::AbstractVector)
-    isempty(locals.names) && throw(ArgumentError("declare component names for named latent access"))
-    length(η) == locals.dimension || throw(DimensionMismatch("latent vector must match component names"))
+    isempty(locals.names) && throw(ArgumentError(
+        "declare component names for named latent access"))
+    length(η) == locals.dimension || throw(DimensionMismatch(
+        "latent vector must match component names"))
     return NamedTuple{locals.names}(ntuple(i -> η[i], locals.dimension))
 end
 
@@ -72,15 +74,8 @@ _residual_parameters(::Union{AdditiveError,ProportionalError}, ps) =
 _residual_parameters(::CombinedError, ps) =
     (; σ_additive=softplus(ps.σ[1]), σ_proportional=softplus(ps.σ[2]))
 _residual_parameters(::AbstractErrorModel, ps) =
-    throw(ArgumentError("provide noise=(dcm, ps) -> constrained_values for this error parameterization"))
-
-struct NamedVEMModel{M,N}
-    builder::M
-    noise::N
-end
-
-(adapter::NamedVEMModel)(dcm, individual, typical, ps) =
-    adapter.builder(individual, named_parameters(dcm, typical), adapter.noise(dcm, ps))
+    throw(ArgumentError(
+        "provide a noise function for this error parameterization"))
 
 """
     VariationalEM(model_builder; local_variables, noise=vem_noise, path_deriv=true)
@@ -88,33 +83,31 @@ end
 `model_builder(individual, theta, noise)` returns an individual probabilistic model.
 The model backend is supplied by a package extension. The current analytic Ω update
 requires the local site to have a centered Gaussian prior with covariance `noise.Ω`.
+`setup` currently requires its default `params=MeanSqrt()` parameterization.
 
 # Arguments
 - `model_builder`: Builder called as `model_builder(individual, theta, noise)`.
 
 # Keyword arguments
 - `local_variables::LocalVariables`: Declaration of the local site and its dimension.
-- `noise`: Function `(dcm, ps) -> constrained_values` reporting `Ω` and the residual error parameters. Default = [`vem_noise`](@ref).
+- `noise`: Function `(dcm, ps) -> values` returning `Ω` and the residual-error
+  parameters. Default = [`vem_noise`](@ref).
 - `family`: Variational family for `q(η)`. Default = `FullRankGaussian()`.
 - `path_deriv`: Whether to use the path derivative estimator. Default = `true`.
 """
-struct VariationalEM{M,L,F,PD<:StaticBool} <: MixedObjective
-    individual_model::M
+struct VariationalEM{M,N,L,F,PD<:StaticBool} <: MixedObjective
+    model_builder::M
+    noise::N
     local_variables::L
     family::F
     path_deriv::PD
 end
 
-function VariationalEM(individual_model, local_variables::LocalVariables;
-        family=FullRankGaussian(), path_deriv::Bool=true)
+function VariationalEM(model_builder; local_variables::LocalVariables,
+        noise=vem_noise, family=FullRankGaussian(), path_deriv::Bool=true)
     family isa FullRankGaussian ||
         throw(ArgumentError("only FullRankGaussian is currently supported"))
-    return VariationalEM(individual_model, local_variables, family, static(path_deriv))
-end
-
-function VariationalEM(individual_model; local_variables::LocalVariables,
-        noise=vem_noise, kwargs...)
-    return VariationalEM(NamedVEMModel(individual_model, noise), local_variables; kwargs...)
+    return VariationalEM(model_builder, noise, local_variables, family, static(path_deriv))
 end
 
 _num_random_effects(objective::VariationalEM) = objective.local_variables.dimension
@@ -122,11 +115,13 @@ _num_random_effects(objective::VariationalEM) = objective.local_variables.dimens
 function _latent_values(objective::VariationalEM, η)
     length(η) == _num_random_effects(objective) ||
         throw(DimensionMismatch("latent sample does not match LocalVariables"))
-    return objective.local_variables.pack(η)
+    site = objective.local_variables.site
+    return NamedTuple{(site,)}((η,))
 end
 
 _individual_model(objective::VariationalEM, dcm, individual, typical, ps) =
-    objective.individual_model(dcm, individual, typical, ps)
+    objective.model_builder(individual, named_parameters(dcm, typical),
+        objective.noise(dcm, ps))
 
 ##### Probabilistic-model backend contract
 #
@@ -143,8 +138,8 @@ _individual_model(objective::VariationalEM, dcm, individual, typical, ps) =
 #   _individual_loglikelihood(model, values) -> Real
 #       Log likelihood of the observations only, used by the M-step.
 #
-# `values` is always the latent vector packed by `locals.pack`. Both densities must be
-# differentiable by the AD backend used to fit the model.
+# `values` is a named tuple containing the declared local site. Both densities must
+# be differentiable by the AD backend used to fit the model.
 
 _unsupported_model(model) = throw(ArgumentError(
     "no probabilistic-model backend is loaded for $(typeof(model))"))
@@ -155,6 +150,8 @@ _individual_loglikelihood(model, values) = _unsupported_model(model)
 _validate_vem_setup(::MixedObjective, dcm, population, ps, st) = nothing
 
 function _validate_vem_setup(objective::VariationalEM, dcm, population, ps, st)
+    :L in keys(ps.phi) || throw(ArgumentError(
+        "VariationalEM currently requires params=MeanSqrt()"))
     typical, _ = predict_typ_parameters(dcm, population, ps, st)
     locals = objective.local_variables
     values = _latent_values(objective, zeros(eltype(ps.omega), locals.dimension))

@@ -127,7 +127,9 @@ function add_path_deriv_dlogq(∇, ps, st)
     return ∇
 end
 
-function _gradient(obj::Union{VariationalELBO,VariationalEM}, dcm::DeepCompartmentModel{P,M}, data, batch::AbstractArray{<:Int}, ps, st) where {P<:SciMLBase.AbstractDEProblem,M<:Lux.AbstractLuxLayer}
+function _gradient(obj::Union{VariationalELBO,VariationalEM},
+        dcm::DeepCompartmentModel{P,M}, data, batch::AbstractArray{<:Int}, ps, st
+    ) where {P<:SciMLBase.AbstractDEProblem,M<:Lux.AbstractLuxLayer}
     ps_batch, st_batch = take_batch(ps, st, batch; exclude = dcm.error isa ErrorModelSet ? (:error) : nothing)
     grad_batch = _gradient(obj, dcm, data[batch], ps_batch, st_batch)
     # TODO: correct phi indices (potentially more to do for other models)
@@ -212,8 +214,10 @@ function residual_error_value_and_gradient(rng::Random.AbstractRNG, dcm::DeepCom
     return only(res), Accessors.@set ∇.error = grad
 end
 
-residual_error_value_and_gradient(rng, ::Any, dcm, data, ps, st; kwargs...) =
-    residual_error_value_and_gradient(rng, dcm, data, ps, st; kwargs...)
+function residual_error_value_and_gradient(
+        rng, ::Union{LogLikelihood,MixedObjective}, dcm, data, ps, st; kwargs...)
+    return residual_error_value_and_gradient(rng, dcm, data, ps, st; kwargs...)
+end
 
 function residual_error_value_and_gradient(rng::Random.AbstractRNG,
         objective::VariationalEM, dcm::DeepCompartmentModel, population::Population,

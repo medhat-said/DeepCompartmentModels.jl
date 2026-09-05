@@ -1,4 +1,4 @@
-module NamedVEMAPITests
+module DynamicPPLVEMTests
 
 using DeepCompartmentModels, DynamicPPL, LinearAlgebra, Random, Test
 using ForwardDiff, Zygote
@@ -11,8 +11,8 @@ DynamicPPL.@model function api_model(theta, noise, observation=0.0)
     return (; theta, noise)
 end
 
-# A model that fixes its own latent dimension instead of using `noise.prior`, used to
-# check that a disagreement with the LocalVariables declaration is still reported.
+# Fixing the latent dimension in the model lets us test a disagreement with
+# `LocalVariables`.
 DynamicPPL.@model function fixed_dim_model(theta, noise, observation=0.0)
     η ~ MvNormal(zeros(2), noise.Ω)
     observation ~ Normal(theta.CL + η[1], noise.σ)
@@ -27,7 +27,7 @@ DynamicPPL.@model function no_site_model(theta, noise)
     return theta
 end
 
-@testset "Named VEM API" begin
+@testset "DynamicPPL VEM" begin
     locals = LocalVariables(:η, (:CL, :V))
     dcm = DCM(one_comp_abs!, 2, Lux.Chain(), AdditiveError(0.1);
         target=2, parameter_names=(:Ka, :CL, :V))
@@ -37,10 +37,13 @@ end
     builder = (individual, theta, noise) -> api_model(theta, noise)
     objective = VariationalEM(builder; local_variables=locals)
     ps, st = setup(objective, Random.Xoshiro(1), dcm, population, Float64)
+    @test_throws ArgumentError setup(objective, Random.Xoshiro(1), dcm,
+        population, Float64; params=MeanVar())
 
     @test locals.dimension == 2
     @test locals([0.1, 0.2]) == (; CL=0.1, V=0.2)
-    @test locals.pack([0.1, 0.2]) == (; η=[0.1, 0.2])
+    @test DeepCompartmentModels._latent_values(objective, [0.1, 0.2]) ==
+        (; η=[0.1, 0.2])
     latent_loss = x -> locals(x).CL^2 + sum(abs2, x)
     @test only(Zygote.gradient(latent_loss, [0.1, 0.2])) ≈
         ForwardDiff.gradient(latent_loss, [0.1, 0.2])
@@ -57,7 +60,6 @@ end
         @test anonymous.dimension == dimension
         @test anonymous.site == :η
         @test anonymous.names == ()
-        @test anonymous.pack(ones(dimension)) == (; η=ones(dimension))
         # Named access is only available when component names were declared.
         @test_throws ArgumentError anonymous(ones(dimension))
     end
@@ -74,7 +76,8 @@ end
     @test DeepCompartmentModels.predict(dcm, person, (; V=2.0, Ka=1.0, CL=0.2)) ≈
         DeepCompartmentModels.predict(dcm, person, [1.0, 0.2, 2.0])
     @test_throws ArgumentError DeepCompartmentModels.predict(dcm, person, (; Ka=1.0, CL=0.2))
-    @test_throws ArgumentError DeepCompartmentModels.predict(dcm, person, (; Ka=1.0, CL=0.2, volume=2.0))
+    @test_throws ArgumentError DeepCompartmentModels.predict(
+        dcm, person, (; Ka=1.0, CL=0.2, volume=2.0))
     unnamed = DCM(one_comp_abs!, 2, Lux.Chain(), AdditiveError(0.1); target=2)
     @test_throws ArgumentError named_parameters(unnamed, [1.0, 0.2, 2.0])
     @test_throws ArgumentError DeepCompartmentModels.predict(unnamed, person, theta)

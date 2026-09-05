@@ -1,7 +1,7 @@
 import InteractiveUtils: @code_lowered
 
 """
-    DeepCompartmentModel{P,M,E,S}
+    DeepCompartmentModel
 
 Model architecture originally described in [janssen2022]. Originally uses a 
 neural network to learn the relationship between the covariates and the 
@@ -14,11 +14,14 @@ a compartment model.
 - `error`: Error model to use for likelihood calculations.
 - `target`: The index of the partial derivative for the prediction of the dependent variable. Default = 1.
 - `sensealg`: Sensitivity algorithm to use for the calculation of gradients of the parameters with respect to the DESolution.
+- `parameter_names`: Names of the differential-equation parameters in their expected order.
 
 \\
 [janssen2022] Janssen, Alexander, et al. "Deep compartment models: a deep learning approach for the reliable prediction of time‐series data in pharmacokinetic modeling." CPT: Pharmacometrics & Systems Pharmacology 11.7 (2022): 934-945.
 """
-struct DeepCompartmentModel{P<:SciMLBase.AbstractDEProblem,M<:Lux.AbstractLuxLayer,E<:AbstractErrorModel,T<:Union{<:Int,AbstractVector{<:Int}}, S<:SciMLBase.AbstractSensitivityAlgorithm,N<:Tuple} <: AbstractDEModel{P,M,E,S}
+struct DeepCompartmentModel{P<:SciMLBase.AbstractDEProblem,M<:Lux.AbstractLuxLayer,
+        E<:AbstractErrorModel,T<:Union{<:Int,AbstractVector{<:Int}},
+        S<:SciMLBase.AbstractSensitivityAlgorithm,N<:Tuple} <: AbstractDEModel{P,M,E,S}
     problem::P
     model::M
     error::E
@@ -27,9 +30,10 @@ struct DeepCompartmentModel{P<:SciMLBase.AbstractDEProblem,M<:Lux.AbstractLuxLay
     parameter_names::N
 
     function DeepCompartmentModel(
-        problem::P, model::M, error::E=ImplicitError(); 
-        target::T = 1, sensealg::S = ForwardDiffSensitivity(), parameter_names::N = ()
-    ) where {P<:SciMLBase.AbstractDEProblem, M, T, E<:AbstractErrorModel, S<:SciMLBase.AbstractSensitivityAlgorithm,N<:Tuple}
+            problem::P, model::M, error::E=ImplicitError(); target::T=1,
+            sensealg::S=ForwardDiffSensitivity(), parameter_names::N=()
+        ) where {P<:SciMLBase.AbstractDEProblem,M,T,E<:AbstractErrorModel,
+            S<:SciMLBase.AbstractSensitivityAlgorithm,N<:Tuple}
         _validate_names(parameter_names)
         new{P,M,E,T,S,N}(problem, model, error, target, sensealg, parameter_names)
     end
@@ -41,17 +45,22 @@ function _validate_names(names::Tuple)
     return nothing
 end
 
-"""Name a typical-parameter vector using the ODE order declared on `DCM`."""
+"""
+    named_parameters(dcm, values)
+
+Name a parameter vector using the order declared by `parameter_names` on `dcm`.
+"""
 function named_parameters(dcm::DeepCompartmentModel, values::AbstractVector)
     names = dcm.parameter_names
     isempty(names) && throw(ArgumentError("declare parameter_names on DCM for named parameters"))
-    length(names) == length(values) || throw(DimensionMismatch("parameter_names must match the typical-parameter vector"))
+    length(names) == length(values) || throw(DimensionMismatch(
+        "parameter_names must match the typical-parameter vector"))
     return NamedTuple{names}(ntuple(i -> values[i], length(names)))
 end
 
 # Constructors. 
 """
-    DeepCompartmentModel(ode_fn, model, error; target, sensealg)
+    DeepCompartmentModel(ode_fn, model, error; target, sensealg, parameter_names)
 
 Convenience constructor that internally creates an ODEProblem based on the 
 passed ode_fn. Attempts to estimate the number of partial differential equations
@@ -85,7 +94,8 @@ function _estimate_num_partials(ode_fn::Function)
 end
 
 """
-DeepCompartmentModel(ode_fn, num_partials, model, error=ImplicitError(); target, sensealg)
+DeepCompartmentModel(ode_fn, num_partials, model, error=ImplicitError();
+    target, sensealg, parameter_names)
 
 Convenience constructor that internally creates an ODEProblem based on the 
 passed ode_fn.
@@ -99,6 +109,7 @@ passed ode_fn.
 # Keyword arguments
 - `target`: The index(es) of the compartment(s) for the prediction of the dependent variable. Default = 1.
 - `sensealg`: Sensitivity algorithm to use for the calculation of gradients of the parameters with respect to the DESolution. Default = ForwardDiffSensitivity().
+- `parameter_names`: Optional tuple of names in differential-equation parameter order.
 """
 DeepCompartmentModel(ode_fn::Function, num_partials::Int, model, error::AbstractErrorModel=ImplicitError(); kwargs...) = 
     DeepCompartmentModel(ODEProblem(ode_fn, zeros(num_partials), (-0.1, 1.)), model, error; kwargs...)
@@ -189,7 +200,12 @@ function predict(dcm::AbstractDEModel, data, de_parameters::AbstractArray; targe
     return solve(dcm, data, de_parameters; kwargs...)
 end
 
-"""Predict from named individual parameters, ordered by `dcm.parameter_names`."""
+"""
+    predict(dcm, data, parameters::NamedTuple; kwargs...)
+
+Predict from named differential-equation parameters. The names are reordered to
+match `dcm.parameter_names`.
+"""
 function predict(dcm::DeepCompartmentModel, data, pars::NamedTuple; kwargs...)
     names = dcm.parameter_names
     isempty(names) && throw(ArgumentError("declare parameter_names on DCM for named predictions"))

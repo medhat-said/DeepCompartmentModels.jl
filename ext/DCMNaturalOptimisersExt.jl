@@ -14,8 +14,6 @@ const SqrtManifold = Union{NaturalOptimisers.LieGroupManifold,
 function DCM._validate_local_vi(rule::FullNaturalDescent, ::DCM.FullRankGaussian, objective)
     rule.tau == 1 || throw(ArgumentError(
         "NaturalDescent requires tau=1 for this VI backend"))
-    isnothing(objective.local_variables.site) &&
-        throw(ArgumentError("NaturalDescent requires a named local site"))
     return nothing
 end
 
@@ -93,6 +91,7 @@ function _initialise_state(rule, site, μ, covariance)
     parameters = NamedTuple{(site,)}((zeros(eltype(μ), length(μ)),))
     matched_rule = _match_eltype(rule, eltype(μ))
     state = Optimisers.setup(matched_rule, parameters)
+    # NaturalOptimisers 0.2 has no public API for replacing or reading q moments.
     leaf = state[site]
     leaf.state = merge(leaf.state, (; q=_initial_q(matched_rule.manifold, μ, covariance)))
     return (; parameters, state)
@@ -102,7 +101,8 @@ function _extract_moments(state, site)
     leaf = state[site]
     μ, scale = leaf.state.q
     covariance = _covariance(leaf.rule.manifold, scale)
-    isposdef(covariance) || throw(ArgumentError("NaturalDescent covariance is not positive definite"))
+    isposdef(covariance) || throw(ArgumentError(
+        "NaturalDescent covariance is not positive definite"))
     return (; μ=copy(μ),
         L=LowerTriangular(Matrix(cholesky(covariance).L)))
 end

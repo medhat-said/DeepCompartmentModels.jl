@@ -5,6 +5,9 @@ Alternate local Gaussian-q updates, `ps.theta` updates, and the existing M-step.
 `local_optimizer` selects the q backend; its state is returned for resuming.
 `samples` applies to NaturalDescent and the M-step. The standard DCM q gradient uses
 one reparameterized sample per local epoch.
+
+Returns fitted parameters and model state, persistent local/global optimiser states,
+individual IDs, settings, per-cycle negative-ELBO history, and the completed cycle count.
 """
 function fit_vem(rng::Random.AbstractRNG, objective::VariationalEM,
         dcm::DeepCompartmentModel, population::Population, ps, st;
@@ -86,16 +89,7 @@ function _run_local_vi(rng, optimizer::Optimisers.AbstractRule,
     return opt_state, ps
 end
 
-function m_step(obj::VariationalELBO, rng::Random.AbstractRNG, dcm::DeepCompartmentModel{P,M}, population::Population, ps, st; kwargs...) where {P<:SciMLBase.AbstractDEProblem,M<:Lux.AbstractLuxLayer}
-    @info "Optimising residual error parameters"
-    ps = optimise_residual_error(obj, rng, dcm, population, ps, st; kwargs...)
-    @info "Optimising omega based on Variational posteriors"
-    omega_opt = optimise_omega(ps)
-    
-    return Accessors.@set ps.omega = omega_opt
-end
-
-function m_step(obj::VariationalEM, rng::Random.AbstractRNG,
+function m_step(obj::Union{VariationalELBO,VariationalEM}, rng::Random.AbstractRNG,
         dcm::DeepCompartmentModel, population::Population, ps, st; kwargs...)
     @info "Optimising residual error parameters"
     ps = optimise_residual_error(obj, rng, dcm, population, ps, st; kwargs...)
@@ -103,7 +97,9 @@ function m_step(obj::VariationalEM, rng::Random.AbstractRNG,
     return Accessors.@set ps.omega = optimise_omega(ps)
 end
 
-function optimise_residual_error(obj::Union{<:LogLikelihood,<:MixedObjective}, rng, dcm, data, ps, st; opt=Optimisers.Adam(1e-2), epochs=100, verbose::Bool = true, kwargs...)
+function optimise_residual_error(obj::Union{<:LogLikelihood,<:MixedObjective},
+        rng, dcm, data, ps, st; opt=Optimisers.Adam(1e-2), epochs=100,
+        verbose::Bool=true, kwargs...)
     opt_state = Optimisers.setup(opt, ps)
     for epoch in 1:epochs
         loss, grad = residual_error_value_and_gradient(rng, obj, dcm, data, ps, st; kwargs...)

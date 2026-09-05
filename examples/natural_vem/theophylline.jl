@@ -48,10 +48,12 @@ end
 
 data_file = get(ENV, "DCM_DATA_FILE",
     joinpath(@__DIR__, "..", "..", ".scratch", "theophylline_nmready.csv"))
+isfile(data_file) || error("Dataset not found: $data_file. Set DCM_DATA_FILE to its path.")
 population = load_theophylline(data_file)
 
 init_global(_, dims...) = reshape(log.(expm1.(collect(INITIAL))), dims...)
-parameter_model = AddGlobalParameters(3, 1:3, Float64;
+num_parameters = length(INITIAL)
+parameter_model = AddGlobalParameters(num_parameters, 1:num_parameters, Float64;
     init_theta=init_global, activation=Lux.softplus)
 # CHANGE: select the ODE, parameter layer, error model, and observed compartment.
 dcm = DCM(one_comp_abs!, parameter_model, AdditiveError(1.0);
@@ -79,7 +81,7 @@ noise = vem_noise(dcm, ps)
 predictions = map(eachindex(population)) do i
     theta = named_parameters(dcm, typical[:, i])
     model = model_builder(population[i], theta, noise)
-    DynamicPPL.returned(model, ETA.pack(ps.phi.μ[i])).prediction
+    DynamicPPL.returned(model, (; η=ps.phi.μ[i])).prediction
 end
 
 observed = reduce(vcat, [get_y(individual) for individual in population])
